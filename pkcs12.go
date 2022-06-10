@@ -458,6 +458,17 @@ func getSafeContents(p12Data, password []byte, expectedItems int) (bags []safeBa
 // LocalKeyId attribute set to the SHA-1 fingerprint of the end-entity
 // certificate.
 func Encode(rand io.Reader, privateKey interface{}, certificate *x509.Certificate, caCerts []*x509.Certificate, password string) (pfxData []byte, err error) {
+	var caCertsWithFriendlyNames []TrustStoreEntry
+	for _, cert := range caCerts {
+		caCertsWithFriendlyNames = append(caCertsWithFriendlyNames, TrustStoreEntry{
+			Cert:         cert,
+			FriendlyName: "",
+		})
+	}
+	return EncodeKeyStoreEntries(rand, privateKey, certificate, caCertsWithFriendlyNames, password)
+}
+
+func EncodeKeyStoreEntries(rand io.Reader, privateKey interface{}, certificate *x509.Certificate, caCertsWithFriendlyNames []TrustStoreEntry, password string) (pfxData []byte, err error) {
 	encodedPassword, err := bmpStringZeroTerminated(password)
 	if err != nil {
 		return nil, err
@@ -483,8 +494,33 @@ func Encode(rand io.Reader, privateKey interface{}, certificate *x509.Certificat
 	}
 	certBags = append(certBags, *certBag)
 
-	for _, cert := range caCerts {
-		if certBag, err = makeCertBag(cert.Raw, []pkcs12Attribute{}); err != nil {
+	for _, TrustStoreEntry := range caCertsWithFriendlyNames {
+		var attributes []pkcs12Attribute
+		if TrustStoreEntry.FriendlyName != "" {
+			bmpFriendlyName, err := bmpString(TrustStoreEntry.FriendlyName)
+			if err != nil {
+				return nil, err
+			}
+			encodedFriendlyName, err := asn1.Marshal(asn1.RawValue{
+				Class:      0,
+				Tag:        30,
+				IsCompound: false,
+				Bytes:      bmpFriendlyName,
+			})
+			if err != nil {
+				return nil, err
+			}
+			attributes = append(attributes, pkcs12Attribute{
+				Id: oidFriendlyName,
+				Value: asn1.RawValue{
+					Class:      0,
+					Tag:        17,
+					IsCompound: true,
+					Bytes:      encodedFriendlyName,
+				},
+			})
+		}
+		if certBag, err = makeCertBag(TrustStoreEntry.Cert.Raw, attributes); err != nil {
 			return nil, err
 		}
 		certBags = append(certBags, *certBag)
